@@ -19,7 +19,7 @@ One simulated hour: 200 subscribers, 12 cells, 1228 logins, 99 failures. Four at
 
 **4 of 4 found, 0 false positives.** The hard one was the replay attack: it uses the same error code (`SYNCH_FAILURE`) as normal resync noise, and three noise failures happened in the same minutes. Grouping by subscriber instead of by cell or time is what separated them.
 
-Each rule, how it handles false positives, and the FiGHT mapping are explained in [docs/DETECTIONS.md](docs/DETECTIONS.md).
+Each rule, how it handles false positives, and the FiGHT mapping are explained in [docs/DETECTIONS.md](docs/DETECTIONS.md). The full build log, step by step with screenshots, is in [docs/SOC_LOG.md](docs/SOC_LOG.md).
 
 ## How it works
 
@@ -67,6 +67,7 @@ tests/               generator tests (run in CI)
 detections/          Splunk detection rules (SPL)
 dashboards/          Splunk SOC dashboard (Simple XML)
 docs/DETECTIONS.md   what each rule does, false positives, FiGHT mapping
+docs/SOC_LOG.md      build log with screenshots, from logging to hunting in Splunk
 ```
 
 ## License

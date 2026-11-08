@@ -1,0 +1,10 @@
+``` Replay / linkability attack (tracking one person)
+    The same subscriber gets SYNCH_FAILURE again and again, because an
+    attacker keeps replaying an old challenge to check if that phone is
+    nearby. Normal phones get SYNCH_FAILURE once, resync and log in,
+    so we count per person to keep the noise out.
+    Threshold: 3 per subscriber per 10 minutes. ```
+index=fiveg source="traffic.jsonl" event_type=auth_failure cause=SYNCH_FAILURE
+| bin _time span=10m
+| stats count values(cell) as cells by _time subscriber
+| where count >= 3

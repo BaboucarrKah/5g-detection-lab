@@ -1,0 +1,10 @@
+``` Fake base station / IMSI catcher
+    Many DIFFERENT subscribers fail the MAC check in the same cell
+    within 5 minutes. One phone failing could be a broken SIM, but 5+
+    different phones in one place means something there is pretending
+    to be the network.
+    Threshold: 5 distinct subscribers per cell per 5 minutes. ```
+index=fiveg source="traffic.jsonl" event_type=auth_failure cause=MAC_FAILURE
+| bin _time span=5m
+| stats count dc(subscriber) as subscribers by _time cell
+| where subscribers >= 5

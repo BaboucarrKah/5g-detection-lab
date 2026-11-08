@@ -1,0 +1,10 @@
+``` Rogue or compromised roaming network
+    Phones accept the challenge, but RES* doesn't match because it is
+    bound to the serving network name. Several of our subscribers
+    failing like this through the same network means that network is
+    reusing or relaying challenges made for someone else.
+    Threshold: 3 distinct subscribers per network per 10 minutes. ```
+index=fiveg source="traffic.jsonl" event_type=auth_failure cause=RES_MISMATCH
+| bin _time span=10m
+| stats count dc(subscriber) as subscribers values(cell) as cells by _time serving_network
+| where subscribers >= 3

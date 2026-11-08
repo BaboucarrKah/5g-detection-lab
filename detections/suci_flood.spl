@@ -1,0 +1,10 @@
+``` SUCI flood (DoS against the home network)
+    Many SUCIs that can't be decrypted, from the same cell, very fast.
+    The home network never learns who sent them, so there is no
+    subscriber to count. Instead we count how many per minute per cell.
+    Normal traffic almost never has SUCI_INVALID.
+    Threshold: 10 per cell per minute. ```
+index=fiveg source="traffic.jsonl" event_type=auth_failure cause=SUCI_INVALID
+| bin _time span=1m
+| stats count by _time cell
+| where count >= 10

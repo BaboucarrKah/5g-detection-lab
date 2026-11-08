@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiveg-detection-lab"
+version = "0.1.0"
+description = "Synthetic 5G authentication traffic with hidden attacks, and Splunk detections to find them"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Baboucarr Kah" }]
+dependencies = [
+    "fiveg-auth-toolkit @ git+https://github.com/BaboucarrKah/5G-Auth-Toolkit.git",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+5g-lab = "detection_lab.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]

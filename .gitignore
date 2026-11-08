@@ -8,3 +8,4 @@ build/
 dist/
 *.jsonl
 !data/sample_*.jsonl
+*_truth.json

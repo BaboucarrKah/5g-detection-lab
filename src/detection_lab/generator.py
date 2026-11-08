@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TextIO
 
+from fiveg_auth.aka import AuthError
 from fiveg_auth.events import EventLog
 from fiveg_auth.network import UE, HomeNetwork, ServingNetwork, Subscriber
 
@@ -54,6 +55,7 @@ class Lab:
     seaf: ServingNetwork
     cells: list[str]
     phones: list[Phone]
+    rng: random.Random
 
 
 def build_lab(out: TextIO, n_subscribers: int = 200, n_cells: int = 12,
@@ -83,4 +85,62 @@ def build_lab(out: TextIO, n_subscribers: int = 200, n_cells: int = 12,
         ue = UE(MCC, MNC, msin, k, opc, home.key.public_bytes)
         phones.append(Phone(ue, rng.choice(cells)))
 
-    return Lab(clock, home, seaf, cells, phones)
+    return Lab(clock, home, seaf, cells, phones, rng)
+
+
+NEIGHBOUR_CHANCE = 0.2  # how often a phone connects through another cell than its usual one
+DESYNC_CHANCE = 0.01  # how often a phone's counter has drifted and needs resyncing (harmless)
+
+def normal_traffic(lab: Lab, duration: float = 3600,
+                   logins_per_minute: float = 20) -> dict[str, int]:
+    """Simulate ordinary logins for `duration` seconds.
+
+    Random phones log in at random times, mostly through their home cell,
+    sometimes through another one (people move around). Returns a small
+    summary so the caller can see how much traffic was made.
+    """
+    end = lab.clock.now() + timedelta(seconds=duration)
+    stats = {"logins": 0, "resyncs": 0}
+
+    while True:
+        # Wait a random amount of time until the next login
+        lab.clock.advance(lab.rng.expovariate(logins_per_minute / 60))
+        if lab.clock.now() >= end:
+            break
+
+        # Pick a random phone, and the cell it connects through this time
+        phone = lab.rng.choice(lab.phones)
+        cell = phone.cell
+        if lab.rng.random() < NEIGHBOUR_CHANCE:
+            cell = lab.rng.choice(lab.cells)
+
+        if lab.rng.random() < DESYNC_CHANCE:
+            resync(lab, phone, cell)
+            stats["resyncs"] += 1
+        else:
+            lab.seaf.register(phone.ue, cell=cell)
+        stats["logins"] += 1
+
+    return stats
+
+def resync(lab: Lab, phone: Phone, cell: str) -> None:
+    """Harmless noise: the phone's counter has drifted ahead of the network's.
+
+    The first login fails with SYNCH_FAILURE, the network resynchronises,
+    and the phone logs in fine a couple of seconds later. In the logs this
+    looks like one failure followed straight away by a success.
+    """
+    sub = lab.home.subscribers[phone.ue.msin]
+
+    # Make the phone think it has already seen a much higher SQN
+    phone.ue.highest_sqn = sub.sqn + 50
+
+    try:
+        lab.seaf.register(phone.ue, cell=cell)
+    except AuthError:
+        pass  # expected: the phone rejects the challenge, and it gets logged
+
+    # The network catches up with the phone's counter, then the phone retries
+    sub.sqn = phone.ue.highest_sqn
+    lab.clock.advance(2)
+    lab.seaf.register(phone.ue, cell=cell)

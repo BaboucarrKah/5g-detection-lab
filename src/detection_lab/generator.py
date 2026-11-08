@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TextIO
 
-from fiveg_auth.aka import AuthError
+from fiveg_auth.aka import AuthError, serving_network_name
 from fiveg_auth.events import EventLog
 from fiveg_auth.network import UE, HomeNetwork, ServingNetwork, Subscriber
 
@@ -144,3 +144,151 @@ def resync(lab: Lab, phone: Phone, cell: str) -> None:
     sub.sqn = phone.ue.highest_sqn
     lab.clock.advance(2)
     lab.seaf.register(phone.ue, cell=cell)
+
+
+def flip_bit(data: bytes, index: int) -> bytes:
+    """Return a copy of `data` with one bit flipped, like an attacker tampering with it."""
+    return data[:index] + bytes([data[index] ^ 1]) + data[index + 1:]
+
+
+def fake_base_station(lab: Lab, cell: str, victims: int = 25, gap: float = 5) -> dict:
+    """A fake base station in one cell tampers with the challenge to nearby phones.
+
+    Every phone that connects through it rejects the forged challenge with
+    MAC_FAILURE. In the logs: many different subscribers failing in the same
+    cell within a few minutes. Normal traffic keeps going in between.
+    """
+    start = lab.clock.now().isoformat()
+
+    for phone in lab.rng.sample(lab.phones, victims):
+        # Some normal traffic happens between each victim
+        normal_traffic(lab, duration=gap)
+
+        # The real network sends a challenge, the fake base station changes one bit of the MAC
+        sv = lab.home.authenticate(phone.ue.make_suci(), lab.seaf.snn, cell)
+        forged_autn = flip_bit(sv.autn, len(sv.autn) - 1)
+
+        # The phone spots the forged MAC, refuses, and the failure is reported back
+        try:
+            phone.ue.on_auth_request(sv.rand, forged_autn, lab.seaf.snn)
+        except AuthError as e:
+            lab.home.report_failure(sv.rand, e.cause)
+
+    return {"attack": "fake_base_station", "cell": cell,
+            "start": start, "end": lab.clock.now().isoformat()}
+
+
+def replay_attack(lab: Lab, target: Phone, attempts: int = 8, gap: float = 30) -> dict:
+    """An attacker replays one captured challenge to a single target, again and again.
+
+    The challenge is genuine, so the MAC is valid, but its SQN is old, so the
+    phone rejects it with SYNCH_FAILURE every time. In the logs: repeated
+    SYNCH_FAILUREs for one subscriber, with no quick success after them.
+    """
+    start = lab.clock.now().isoformat()
+    cell = target.cell
+
+    # The attacker sniffs one real login and records the challenge
+    sv = lab.home.authenticate(target.ue.make_suci(), lab.seaf.snn, cell)
+    res_star = target.ue.on_auth_request(sv.rand, sv.autn, lab.seaf.snn)
+    lab.home.confirm(sv.rand, res_star)
+    captured = (sv.rand, sv.autn)
+
+    for _ in range(attempts):
+        normal_traffic(lab, duration=gap)
+
+        # The network sends a fresh challenge, the attacker swaps in the old one
+        fresh = lab.home.authenticate(target.ue.make_suci(), lab.seaf.snn, cell)
+        try:
+            target.ue.on_auth_request(*captured, lab.seaf.snn)
+        except AuthError as e:
+            lab.home.report_failure(fresh.rand, e.cause)
+
+    return {"attack": "replay", "cell": cell, "target_msin": target.ue.msin,
+            "start": start, "end": lab.clock.now().isoformat()}
+
+
+def suci_flood(lab: Lab, cell: str, attempts: int = 40, gap: float = 1) -> dict:
+    """A burst of corrupted SUCIs from one cell.
+
+    The home network can't decrypt them, so every event is a SUCI_INVALID
+    with no subscriber. In the logs: many anonymous failures in one cell,
+    close together.
+    """
+    start = lab.clock.now().isoformat()
+
+    for _ in range(attempts):
+        normal_traffic(lab, duration=gap)
+
+        # Take a real SUCI and flip one random bit somewhere in it
+        suci = lab.rng.choice(lab.phones).ue.make_suci()
+        suci.output = flip_bit(suci.output, lab.rng.randrange(len(suci.output)))
+
+        try:
+            lab.home.authenticate(suci, lab.seaf.snn, cell)
+        except AuthError:
+            pass  # expected: the home network rejects it, and it's already logged
+
+    return {"attack": "suci_flood", "cell": cell,
+            "start": start, "end": lab.clock.now().isoformat()}
+
+
+ROGUE_NETWORK = serving_network_name("204", "99")  # a dishonest roaming partner in the Netherlands
+
+
+def rogue_roaming(lab: Lab, attempts: int = 15, gap: float = 10) -> dict:
+    """A roaming partner reuses challenges under the wrong network name.
+
+    It asks the home network for challenges as itself, then presents them to
+    phones as if it were the Norwegian network. The phones accept, but RES*
+    is tied to the network name, so the home network rejects every answer.
+    In the logs: RES_MISMATCH, all from one foreign serving network.
+    """
+    start = lab.clock.now().isoformat()
+
+    for _ in range(attempts):
+        normal_traffic(lab, duration=gap)
+        phone = lab.rng.choice(lab.phones)
+
+        # The rogue network asks for a challenge under its own name
+        sv = lab.home.authenticate(phone.ue.make_suci(), ROGUE_NETWORK, "nl-cell-04")
+
+        # ...but shows it to the phone as if it were the Norwegian network
+        res_star = phone.ue.on_auth_request(sv.rand, sv.autn, lab.seaf.snn)
+
+        try:
+            lab.home.confirm(sv.rand, res_star)
+        except AuthError:
+            pass  # expected: RES* was made for the wrong name, and it's already logged
+
+    return {"attack": "rogue_roaming", "serving_network": ROGUE_NETWORK.decode(),
+            "start": start, "end": lab.clock.now().isoformat()}
+
+
+def generate(out: TextIO, seed: int = 1) -> list[dict]:
+    """Generate one hour of traffic with four attack campaigns hidden in it.
+
+    Every event is written to `out`. Returns the ground truth: one record per
+    attack with what it was, where it happened and when, so detections can be
+    checked against it afterwards.
+    """
+    lab = build_lab(out, seed=seed)
+    end = lab.clock.now() + timedelta(hours=1)
+
+    # Pick where the attacks happen, using the seed so it's the same every run
+    fake_cell, flood_cell = lab.rng.sample(lab.cells, 2)
+    target = lab.rng.choice(lab.phones)
+
+    truth = []
+    normal_traffic(lab, duration=8 * 60)
+    truth.append(fake_base_station(lab, fake_cell))
+    normal_traffic(lab, duration=10 * 60)
+    truth.append(suci_flood(lab, flood_cell))
+    normal_traffic(lab, duration=10 * 60)
+    truth.append(replay_attack(lab, target))
+    normal_traffic(lab, duration=8 * 60)
+    truth.append(rogue_roaming(lab))
+
+    # Fill the rest of the hour with normal traffic
+    normal_traffic(lab, duration=(end - lab.clock.now()).total_seconds())
+    return truth

@@ -1,0 +1,93 @@
+<form version="1.1" theme="dark">
+  <label>5G Authentication - SOC overview</label>
+  <description>Simulated 5G authentication traffic from 5g-detection-lab, with the four detection rules. The default time range is the lab hour (1 Nov 2026, 13:00-14:00 local time).</description>
+  <fieldset submitButton="false">
+    <input type="time" token="t">
+      <label>Time range</label>
+      <default>
+        <earliest>1793534400</earliest>
+        <latest>1793538000</latest>
+      </default>
+    </input>
+  </fieldset>
+  <row>
+    <panel>
+      <single>
+        <title>Logins</title>
+        <search><query>index=fiveg source="traffic.jsonl" | stats count</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Failed logins</title>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure | stats count</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <single>
+        <title>Failure rate (%)</title>
+        <search><query>index=fiveg source="traffic.jsonl" | stats count(eval(event_type="auth_failure")) as f count as t | eval rate=round(100*f/t,1) | fields rate</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </single>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Failed logins per minute, by cause</title>
+      <chart>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure
+| timechart span=1m count by cause</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.axisTitleX.visibility">collapsed</option>
+        <option name="height">300</option>
+      </chart>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Rule 1 - Fake base station (MAC_FAILURE): 5+ different subscribers in one cell within 5 min</title>
+      <table>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure cause=MAC_FAILURE
+| bin _time span=5m
+| stats count dc(subscriber) as subscribers by _time cell
+| where subscribers &gt;= 5</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Rule 2 - SUCI flood (SUCI_INVALID): 10+ per cell per minute</title>
+      <table>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure cause=SUCI_INVALID
+| bin _time span=1m
+| stats count by _time cell
+| where count &gt;= 10</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Rule 3 - Rogue serving network (RES_MISMATCH): 3+ subscribers through one network within 10 min</title>
+      <table>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure cause=RES_MISMATCH
+| bin _time span=10m
+| stats count dc(subscriber) as subscribers values(cell) as cells by _time serving_network
+| where subscribers &gt;= 3</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </table>
+    </panel>
+  </row>
+  <row>
+    <panel>
+      <title>Rule 4 - Replay / linkability (SYNCH_FAILURE): 3+ failures for one subscriber within 10 min</title>
+      <table>
+        <search><query>index=fiveg source="traffic.jsonl" event_type=auth_failure cause=SYNCH_FAILURE
+| bin _time span=10m
+| stats count values(cell) as cells by _time subscriber
+| where count &gt;= 3</query><earliest>$t.earliest$</earliest><latest>$t.latest$</latest></search>
+      </table>
+    </panel>
+  </row>
+</form>
